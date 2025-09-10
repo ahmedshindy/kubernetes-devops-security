@@ -1,0 +1,24 @@
+
+name: DevSecOps CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  REGISTRY: docker.io
+  IMAGE_NAME: ${{ github.repository_owner }}/node-service
+  KUBECONFIG_FILE: ${{ secrets.KUBECONFIG }}
+
+
+
+jobs:
+  say-hello:
+    name: Say Hello
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hello World Action
+        run: echo "Hello, DevSecOps!"
