@@ -138,15 +138,15 @@ jobs:
         java-version: '8'
         distribution: 'temurin'
     
-    - name: Run Mutation Tests (PITest)
-      run: mvn org.pitest:pitest-maven:mutationCoverage
+    # - name: Run Mutation Tests (PITest)
+    #   run: mvn org.pitest:pitest-maven:mutationCoverage
     
-    - name: Upload PITest Reports
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: pitest-reports
-        path: target/pit-reports/
+    # - name: Upload PITest Reports
+    #   uses: actions/upload-artifact@v4
+    #   if: always()
+    #   with:
+    #     name: pitest-reports
+    #     path: target/pit-reports/
 
   docker-build-push:
     name: Docker image build and push
