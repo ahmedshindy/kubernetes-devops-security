@@ -156,6 +156,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      image-digest: ${{ steps.build.outputs.digest }}
+      image-tags: ${{ steps.meta.outputs.tags }}
     
     steps:
     - uses: actions/checkout@v4
@@ -192,6 +195,7 @@ jobs:
           type=raw,value=latest,enable={{is_default_branch}}
     
     - name: Build and push Docker image
+      id: build
       uses: docker/build-push-action@v5
       with:
         context: .
@@ -200,12 +204,104 @@ jobs:
         labels: ${{ steps.meta.outputs.labels }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
+
+  trivy-security-scan:
+    name: Trivy Security Scan
+    runs-on: ubuntu-latest
+    needs: docker-build-push
+    if: always() && needs.docker-build-push.result == 'success'
+    permissions:
+      contents: read
+      security-events: write
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Login to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Extract image tag for scanning
+      id: image-tag
+      run: |
+        # Extract the first tag from the multiline tags output
+        IMAGE_TAG=$(echo "${{ needs.docker-build-push.outputs.image-tags }}" | head -n1)
+        echo "image-tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+        echo "Scanning image: ${IMAGE_TAG}"
+    
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ${{ steps.image-tag.outputs.image-tag }}
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        severity: 'CRITICAL,HIGH,MEDIUM'
+        exit-code: '0'  # Don't fail the build on vulnerabilities (configurable)
+    
+    - name: Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+    
+    - name: Run Trivy vulnerability scanner (Table format)
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ${{ steps.image-tag.outputs.image-tag }}
+        format: 'table'
+        severity: 'CRITICAL,HIGH,MEDIUM'
+        exit-code: '0'
+    
+    - name: Generate Trivy JSON report
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ${{ steps.image-tag.outputs.image-tag }}
+        format: 'json'
+        output: 'trivy-results.json'
+        severity: 'CRITICAL,HIGH,MEDIUM'
+        exit-code: '0'
+    
+    - name: Upload Trivy scan results as artifact
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: trivy-security-scan-results
+        path: |
+          trivy-results.sarif
+          trivy-results.json
+        retention-days: 30
+    
+    - name: Check for critical vulnerabilities
+      run: |
+        # Parse JSON results to check for critical vulnerabilities
+        CRITICAL_COUNT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' trivy-results.json || echo "0")
+        HIGH_COUNT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' trivy-results.json || echo "0")
+        
+        echo "Critical vulnerabilities found: $CRITICAL_COUNT"
+        echo "High vulnerabilities found: $HIGH_COUNT"
+        
+        # Optionally fail the build if critical vulnerabilities are found
+        # Uncomment the following lines to enable this behavior:
+        # if [ "$CRITICAL_COUNT" -gt 0 ]; then
+        #   echo "❌ Critical vulnerabilities found! Failing the build."
+        #   exit 1
+        # fi
+        
+        # Create a summary
+        echo "## 🔒 Security Scan Summary" >> $GITHUB_STEP_SUMMARY
+        echo "- **Critical**: $CRITICAL_COUNT vulnerabilities" >> $GITHUB_STEP_SUMMARY
+        echo "- **High**: $HIGH_COUNT vulnerabilities" >> $GITHUB_STEP_SUMMARY
+        echo "- **Image**: ${{ steps.image-tag.outputs.image-tag }}" >> $GITHUB_STEP_SUMMARY
+
   # To be included in future iterations
   # kubernetes-deployment-dev:
   #   name: Kubernetes Deployment - DEV
   #   runs-on: ubuntu-latest
-  #   needs: docker-build-push
-  #   if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+  #   needs: [docker-build-push, trivy-security-scan]
+  #   if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && needs.trivy-security-scan.result == 'success'
     
   #   steps:
   #   - uses: actions/checkout@v4
