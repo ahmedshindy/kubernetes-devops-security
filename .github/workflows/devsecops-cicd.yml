@@ -124,6 +124,79 @@ jobs:
   #         -Dsonar.token=${{ env.SONAR_TOKEN }} \
   #         -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
 
+  opa-conftest:
+    name: OPA Conftest - Dockerfile Security
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Conftest
+      run: |
+        wget https://github.com/open-policy-agent/conftest/releases/download/v0.46.0/conftest_0.46.0_Linux_x86_64.tar.gz
+        tar xzf conftest_0.46.0_Linux_x86_64.tar.gz
+        sudo mv conftest /usr/local/bin
+        chmod +x /usr/local/bin/conftest
+    
+    - name: Create OPA Docker security policy
+      run: |
+        mkdir -p opa-policies
+        cat > opa-policies/opa-docker-security.rego << 'EOF'
+        package docker.security
+        
+        import rego.v1
+        
+        # Deny running as root
+        deny contains msg if {
+            input[_].Cmd == "user"
+            val := input[_].Value
+            val[0] == "root"
+            msg := "Container should not run as root user"
+        }
+        
+        # Require specific base images (customize as needed)
+        deny contains msg if {
+            input[_].Cmd == "from"
+            val := input[_].Value
+            not startswith(val[0], "openjdk:")
+            not startswith(val[0], "eclipse-temurin:")
+            not startswith(val[0], "amazoncorretto:")
+            msg := "Base image should use trusted JDK images"
+        }
+        
+        # Check for COPY/ADD with broad permissions
+        warn contains msg if {
+            input[_].Cmd == "copy"
+            msg := "Review COPY commands for security implications"
+        }
+        
+        # Ensure EXPOSE is used appropriately
+        warn contains msg if {
+            input[_].Cmd == "expose"
+            val := input[_].Value
+            to_number(val[0]) < 1024
+            msg := sprintf("Exposing privileged port %s", [val[0]])
+        }
+        EOF
+    
+    - name: Run OPA Conftest
+      run: |
+        if [ -f "Dockerfile" ]; then
+          /usr/local/bin/conftest test --policy opa-policies/opa-docker-security.rego Dockerfile
+        else
+          echo "No Dockerfile found, skipping Conftest scan"
+          exit 1
+        fi
+    
+    - name: Upload OPA policy and results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: opa-conftest-results
+        path: opa-policies/
+        retention-days: 30
+
   mutation-tests:
     name: Mutation Tests - PITest
     runs-on: ubuntu-latest
@@ -151,8 +224,8 @@ jobs:
   docker-build-push:
     name: Docker image build and push
     runs-on: ubuntu-latest
-    # needs: [sonarqube-analysis, mutation-tests]
-    if: always() && (needs.sonarqube-analysis.result == 'success')
+    needs: [opa-conftest, mutation-tests]
+    if: always() && (needs.opa-conftest.result == 'success')
     permissions:
       contents: read
       packages: write
