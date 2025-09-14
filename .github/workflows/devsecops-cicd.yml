@@ -145,10 +145,8 @@ jobs:
         cat > opa-policies/opa-docker-security.rego << 'EOF'
         package docker.security
         
-        import rego.v1
-        
         # Deny running as root
-        deny contains msg if {
+        deny[msg] {
             input[_].Cmd == "user"
             val := input[_].Value
             val[0] == "root"
@@ -156,7 +154,7 @@ jobs:
         }
         
         # Require specific base images (customize as needed)
-        deny contains msg if {
+        deny[msg] {
             input[_].Cmd == "from"
             val := input[_].Value
             not startswith(val[0], "openjdk:")
@@ -165,18 +163,30 @@ jobs:
             msg := "Base image should use trusted JDK images"
         }
         
-        # Check for COPY/ADD with broad permissions
-        warn contains msg if {
-            input[_].Cmd == "copy"
-            msg := "Review COPY commands for security implications"
+        # Check for ADD commands (prefer COPY)
+        warn[msg] {
+            input[_].Cmd == "add"
+            msg := "Consider using COPY instead of ADD for better security"
         }
         
-        # Ensure EXPOSE is used appropriately
-        warn contains msg if {
-            input[_].Cmd == "expose"
-            val := input[_].Value
-            to_number(val[0]) < 1024
-            msg := sprintf("Exposing privileged port %s", [val[0]])
+        # Ensure non-root user is specified
+        warn[msg] {
+            not has_user_instruction
+            msg := "Consider adding a non-root USER instruction for better security"
+        }
+        
+        has_user_instruction {
+            input[_].Cmd == "user"
+        }
+        
+        # Check for HEALTHCHECK
+        warn[msg] {
+            not has_healthcheck
+            msg := "Consider adding HEALTHCHECK instruction for better monitoring"
+        }
+        
+        has_healthcheck {
+            input[_].Cmd == "healthcheck"
         }
         EOF
     
